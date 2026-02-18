@@ -20,3 +20,7 @@ Analyze national unemployment trends using ENE microdata and replicate official 
 
 ## Key Insights
 (To be completed after dashboard)
+
+## Why Weighting Matters
+
+The ENE uses calibrated expansion factors to ensure population-level representativeness across regions, age groups and sex strata.
