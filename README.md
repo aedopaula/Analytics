@@ -1,26 +1,22 @@
-# Data Analytics Projects
-## Table of Contents
-- [Project Overview](#project-overview)
-- [Recommendations](#recommendations)
-### Project Overview
-### Data Sources
-### Tools
-### Data Cleaning / Preparation
-### Exploratory Data Analysis
-### Data Analysis
-### Results / Findings
-### Recommendations
-### Limitations
-### References
+# Chile Unemployment Analysis (2020–2024)
 
+## Objective
+Analyze national unemployment trends using ENE microdata and replicate official unemployment rate calculations using expansion factors.
 
-|Heading1|Heading2|
-|--------|--------|
-|Content|Content2|
-|Python|SQL|
+## Data Source
+- ENE Microdata (INE Chile)
+- Years: 2020–2024
+- Population: 15+
 
-`column_1`
-**bold**
+## Methodology
+- Weighted calculations using `fact_anual`
+- Labor force defined as CAE 1–5
+- Unemployment defined as CAE 4–5
 
+## Data Architecture
+- Python → cleaning
+- PostgreSQL → aggregation
+- Power BI → visualization
 
-
+## Key Insights
+(To be completed after dashboard)
