@@ -1,0 +1,170 @@
+"""
+================================================================================
+ETL Pipeline - Unemployment Data Chile (INE)
+================================================================================
+Source  : Instituto Nacional de Estadísticas - Chile (ENE Survey)
+Period  : 2020 - 2024
+Author  : Paula Aedo
+--------------------------------------------------------------------------------
+Pipeline:
+    1. Load raw CSVs from local folder
+    2. Select and clean relevant columns
+    3. Apply ENE expansion factor (fact_anual)
+    4. Load final table to PostgreSQL
+--------------------------------------------------------------------------------
+Notes:
+    - The ENE uses calibrated expansion factors (fact_anual) to ensure
+      population-level representativeness across regions, age groups and sex.
+    - cae_general == 0 corresponds to population under 15 years old → excluded.
+    - fact_anual uses comma as decimal separator in source files → converted to float.
+================================================================================
+"""
+
+import os
+import sys
+import logging
+import pandas as pd
+from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
+
+load_dotenv()
+
+# ── LOGGING CONFIG ─────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+log = logging.getLogger(__name__)
+
+
+# ── CONFIG ─────────────────────────────────────────────────────────────────────
+FOLDER_PATH = r"C:\Users\paula\Documents\DATA PAU\chile_unemployment_pipeline_year"
+
+COLUMNS_NEEDED = [
+    "ano_encuesta",   # Survey year
+    "ano_trimestre",  # Quarter
+    "region",         # Region code
+    "sexo",           # Gender (1=Male, 2=Female)
+    "edad",           # Age
+    "tramo_edad",     # Age group
+    "nivel",          # Education level
+    "parentesco",     # Household relationship
+    "cae_general",    # Labor force status (1=Employed, 2=Unemployed, 3=Inactive)
+    "fact_anual"      # Annual expansion factor (population weight)
+]
+
+DB_CONFIG = {
+    "user"    : os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "host"    : os.getenv("DB_HOST"),
+    "port"    : os.getenv("DB_PORT"),
+    "database": os.getenv("DB_DATABASE")
+}
+
+TABLE_NAME = "chile_unemployment_year"
+
+
+# ── 1. LOAD RAW DATA ───────────────────────────────────────────────────────────
+def load_raw_data(folder_path: str) -> pd.DataFrame:
+    """
+    Reads all CSV files in the given folder and concatenates them
+    into a single DataFrame. Adds 'source_file' column for traceability.
+    """
+    files = [f for f in os.listdir(folder_path) if f.endswith(".csv")]
+
+    if not files:
+        log.error(f"No CSV files found in: {folder_path}")
+        sys.exit(1)
+
+    log.info(f"Found {len(files)} file(s): {files}")
+
+    df_list = []
+    for file in files:
+        file_path = os.path.join(folder_path, file)
+        df = pd.read_csv(file_path, sep=";", encoding="latin-1", low_memory=False)
+        df_list.append(df)
+        log.info(f"  Loaded: {file} → {df.shape[0]:,} rows")
+
+    full_df = pd.concat(df_list, ignore_index=True)
+    log.info(f"Total rows after concat: {full_df.shape[0]:,}")
+    return full_df
+
+
+# ── 2. CLEAN & TRANSFORM ───────────────────────────────────────────────────────
+def clean_data(full_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Selects relevant columns, cleans types, and filters out
+    population under 15 years old (cae_general == 0).
+    """
+    # Validate that all required columns exist
+    missing = [col for col in COLUMNS_NEEDED if col not in full_df.columns]
+    if missing:
+        log.error(f"Missing columns in source data: {missing}")
+        sys.exit(1)
+
+    df = full_df[COLUMNS_NEEDED].copy()
+
+    # Fix decimal separator in expansion factor (comma → dot)
+    df["fact_anual"] = (
+        df["fact_anual"]
+        .astype(str)
+        .str.replace(",", ".", regex=False)
+        .astype(float)
+    )
+
+    # Exclude population under 15 years old
+    rows_before = len(df)
+    df = df[df["cae_general"] != 0]
+    rows_excluded = rows_before - len(df)
+    log.info(f"Excluded {rows_excluded:,} rows (under 15 years old / cae_general == 0)")
+
+    log.info(f"Clean dataset: {df.shape[0]:,} rows × {df.shape[1]} columns")
+    log.info(f"Years in data: {sorted(df['ano_encuesta'].unique())}")
+    return df
+
+
+# ── 3. LOAD TO POSTGRESQL ──────────────────────────────────────────────────────
+def load_to_postgres(df: pd.DataFrame, config: dict, table_name: str) -> None:
+    """
+    Loads the clean DataFrame into a PostgreSQL table.
+    Replaces the table if it already exists.
+    """
+    conn_string = (
+        f"postgresql+psycopg2://{config['user']}:{config['password']}"
+        f"@{config['host']}:{config['port']}/{config['database']}"
+    )
+
+    try:
+        engine = create_engine(conn_string)
+        log.info(f"Connecting to PostgreSQL → {config['host']}:{config['port']}/{config['database']}")
+
+        df.to_sql(
+            table_name,
+            engine,
+            if_exists="replace",
+            index=False,
+            method="multi",
+            chunksize=10_000
+        )
+        log.info(f"Table '{table_name}' loaded successfully → {len(df):,} rows")
+
+    except SQLAlchemyError as e:
+        log.error(f"Database error: {e}")
+        sys.exit(1)
+
+
+# ── MAIN ───────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    log.info("=" * 60)
+    log.info("ETL START — Chile Unemployment Pipeline")
+    log.info("=" * 60)
+
+    raw_df   = load_raw_data(FOLDER_PATH)
+    clean_df = clean_data(raw_df)
+    load_to_postgres(clean_df, DB_CONFIG, TABLE_NAME)
+
+    log.info("=" * 60)
+    log.info("ETL COMPLETE")
+    log.info("=" * 60)
